@@ -4,46 +4,66 @@ import time
 
 context = zmq.Context()
 
-# ROUTER for Clients
-client_receiver = context.socket(zmq.ROUTER)
+# PULL socket to receive client requests
+client_receiver = context.socket(zmq.PULL)
 client_receiver.bind("tcp://*:5558")
 
-# DEALER for Workers
+# PUSH socket to send results back to clients
+client_responder = context.socket(zmq.PUSH)
+client_responder.bind("tcp://*:5559")
+
+# DEALER socket to forward tasks to workers
 worker_sender = context.socket(zmq.DEALER)
 worker_sender.bind("tcp://*:5555")
 
-# Heartbeat socket
-heartbeat_socket = context.socket(zmq.PULL)
-heartbeat_socket.bind("tcp://*:5557")
+HEARTBEAT_PORT = 5557
+WORKER_TIMEOUT = 10  # seconds
 
-HEARTBEAT_INTERVAL = 1
-WORKER_TIMEOUT = 5  # seconds
 worker_last_seen = {}
 
 def monitor_heartbeats():
+    context = zmq.Context()
+    hb_socket = context.socket(zmq.PULL)
+    hb_socket.bind(f"tcp://*:{HEARTBEAT_PORT}")
+
     while True:
         try:
-            heartbeat = heartbeat_socket.recv_json(flags=zmq.NOBLOCK)
+            heartbeat = hb_socket.recv_json(flags=zmq.NOBLOCK)
             worker_id = heartbeat["worker_id"]
             worker_last_seen[worker_id] = time.time()
-            print(f"[HB] Worker {worker_id} is alive")
+            print(f"[HB] Received heartbeat from {worker_id}")
         except zmq.Again:
             pass
 
-        # Remove timed-out workers
+        # Cleanup dead workers
         now = time.time()
-        for worker_id, last_seen in list(worker_last_seen.items()):
-            if now - last_seen > WORKER_TIMEOUT:
-                print(f"[HB] Worker {worker_id} timed out")
-                del worker_last_seen[worker_id]
+        dead_workers = [w for w, last in worker_last_seen.items() if now - last > WORKER_TIMEOUT]
+        for dead in dead_workers:
+            print(f"[HB] Worker {dead} timed out")
+            del worker_last_seen[dead]
 
-        time.sleep(HEARTBEAT_INTERVAL)
+        time.sleep(1)
 
-# Use a built-in ZMQ queue proxy to forward messages
+def receive_client_requests():
+    """Receive tasks from clients and forward them to workers."""
+    while True:
+        request_data = client_receiver.recv_json()
+        print(f"Received task from client: {request_data}")
+        worker_sender.send_json(request_data)
+
+def receive_worker_results():
+    """Receive results from workers and send them back to clients."""
+    while True:
+        result = worker_sender.recv_json()
+        print(f"Worker result: {result}")
+        client_responder.send_json(result)  # Send result to client
+
 threading.Thread(target=monitor_heartbeats, daemon=True).start()
-threading.Thread(target=lambda: zmq.proxy(client_receiver, worker_sender), daemon=True).start()
+threading.Thread(target=receive_client_requests, daemon=True).start()
+threading.Thread(target=receive_worker_results, daemon=True).start()
 
 print("Master Node is running...")
+
 while True:
     time.sleep(5)
 
