@@ -36,6 +36,15 @@ while True:
     try:
         task_data = task_receiver.recv_json(flags=zmq.NOBLOCK)
         task_type = task_data["task"]
+        # Decode the base64-encoded image string to bytes
+        image_bytes = base64.b64decode(task_data["image"])
+
+        # Convert bytes to numpy array
+        img_data = np.frombuffer(image_bytes, dtype=np.uint8)
+
+        # Decode image to OpenCV format
+        image = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
+        
         img_data = np.frombuffer(task_data["image"], dtype=np.uint8)
 
         image = cv2.imdecode(img_data, cv2.IMREAD_COLOR)
