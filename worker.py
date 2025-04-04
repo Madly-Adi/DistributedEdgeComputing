@@ -5,6 +5,7 @@ import threading
 import time
 import random
 import sys
+import base64
 
 context = zmq.Context()
 
