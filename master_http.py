@@ -1,48 +1,49 @@
-try:
-    # Your existing master node code
-    import zmq
-    import threading
-    import time
+import zmq
+import threading
+import time
 
-    context = zmq.Context()
-    
-    api_receiver = context.socket(zmq.REP)
-    api_receiver.bind("tcp://*:5558")
+context = zmq.Context()
 
-    task_sender = context.socket(zmq.PUSH)
-    task_sender.bind("tcp://*:5555")
+# ROUTER for Clients
+client_receiver = context.socket(zmq.ROUTER)
+client_receiver.bind("tcp://*:5558")
 
-    result_receiver = context.socket(zmq.PULL)
-    result_receiver.bind("tcp://*:5556")
+# DEALER for Workers
+worker_sender = context.socket(zmq.DEALER)
+worker_sender.bind("tcp://*:5555")
 
-    pending_tasks = {}
+# Heartbeat socket
+heartbeat_socket = context.socket(zmq.PULL)
+heartbeat_socket.bind("tcp://*:5557")
 
-    def handle_api_requests():
-        while True:
-            print("Waiting for API request...")
-            request_data = api_receiver.recv_json()
-            print(f"Received task: {request_data}")
-            pending_tasks[request_data["image"]] = api_receiver
-            task_sender.send_json(request_data)
+HEARTBEAT_INTERVAL = 1
+WORKER_TIMEOUT = 5  # seconds
+worker_last_seen = {}
 
-    def send_results():
-        while True:
-            print("Waiting for worker results...")
-            result = result_receiver.recv_json()
-            print(f"Worker result: {result}")
-
-            if result["image"] in pending_tasks:
-                client_socket = pending_tasks.pop(result["image"])
-                client_socket.send_json(result)
-
-    threading.Thread(target=handle_api_requests, daemon=False).start()
-    threading.Thread(target=send_results, daemon=False).start()
-
-    # Keep script alive
+def monitor_heartbeats():
     while True:
-        print("Master Node is running...")
-        time.sleep(5)
+        try:
+            heartbeat = heartbeat_socket.recv_json(flags=zmq.NOBLOCK)
+            worker_id = heartbeat["worker_id"]
+            worker_last_seen[worker_id] = time.time()
+            print(f"[HB] Worker {worker_id} is alive")
+        except zmq.Again:
+            pass
 
-except Exception as e:
-    print(f"Error in Master Node: {e}")
+        # Remove timed-out workers
+        now = time.time()
+        for worker_id, last_seen in list(worker_last_seen.items()):
+            if now - last_seen > WORKER_TIMEOUT:
+                print(f"[HB] Worker {worker_id} timed out")
+                del worker_last_seen[worker_id]
+
+        time.sleep(HEARTBEAT_INTERVAL)
+
+# Use a built-in ZMQ queue proxy to forward messages
+threading.Thread(target=monitor_heartbeats, daemon=True).start()
+threading.Thread(target=lambda: zmq.proxy(client_receiver, worker_sender), daemon=True).start()
+
+print("Master Node is running...")
+while True:
+    time.sleep(5)
 

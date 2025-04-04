@@ -6,12 +6,11 @@ import base64
 
 app = Flask(__name__)
 
-# ZeroMQ Context
 context = zmq.Context()
 
-# REQ-REP socket to communicate with the Master Node
-client_socket = context.socket(zmq.REQ)
-client_socket.connect("tcp://localhost:5558")  # Connect to Master Node
+# PUSH socket to talk to Master
+client_socket = context.socket(zmq.PUSH)
+client_socket.connect("tcp://localhost:5558")
 
 @app.route('/process_image', methods=['POST'])
 def process_image():
@@ -19,21 +18,18 @@ def process_image():
     if 'image' not in request.files or 'task' not in request.form:
         return jsonify({"error": "Missing image or task type"}), 400
 
-    task_type = request.form['task']  # "grayscale" or "edge"
+    task_type = request.form['task']
     image_file = request.files['image']
 
     # Read and encode image
     image = cv2.imdecode(np.frombuffer(image_file.read(), np.uint8), cv2.IMREAD_COLOR)
     _, img_encoded = cv2.imencode('.jpg', image)
 
-    # Convert image bytes to a Base64-encoded string
+    # Convert image bytes to Base64
     img_base64 = base64.b64encode(img_encoded.tobytes()).decode('utf-8')
 
-    # Send task to Master Node
-    request_data = {
-        "task": task_type,
-        "image": img_base64,  # ✅ Send Base64 instead of raw bytes
-    }
+    # Send request to Master
+    request_data = {"task": task_type, "image": img_base64}
     client_socket.send_json(request_data)
 
     # Receive processed image
@@ -51,3 +47,4 @@ def process_image():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+
