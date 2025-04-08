@@ -54,5 +54,7 @@ while True:
 
     # Send result back to master
     response = {"task_id": request_data["task_id"],"task": request_data["task"], "image": encoded_image}
+    print(f"{response}")
+    print(f"Response Sent")
     worker_socket.send_json(response)
 

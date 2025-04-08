@@ -57,6 +57,8 @@ def receive_worker_results():
         result = worker_sender.recv_json()
         print(f"Worker result: {result}")
         client_responder.send_json(result)  # Send result to client
+        client_responder.flush() if hasattr(client_responder, 'flush') else time.sleep(0.1)
+
 
 threading.Thread(target=monitor_heartbeats, daemon=True).start()
 threading.Thread(target=receive_client_requests, daemon=True).start()
