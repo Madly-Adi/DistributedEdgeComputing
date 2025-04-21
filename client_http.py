@@ -5,24 +5,23 @@ import numpy as np
 import base64
 import threading
 import time
-from threading import Event
 import uuid
+import redis
+import json
 
 app = Flask(__name__)
 context = zmq.Context()
 
-# PUSH socket to send tasks to master
+# ZMQ sockets
 client_sender = context.socket(zmq.PUSH)
 client_sender.connect("tcp://localhost:5558")
-
-# PULL socket to receive processed results from master
 client_receiver = context.socket(zmq.PULL)
 client_receiver.connect("tcp://localhost:5559")
 
-responses = {}         # task_id: result
-response_events = {}   # task_id: threading.Event for async waiting
+# Redis setup
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-# 🔧 Enhanced HTML with CSS
+# HTML template 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -101,19 +100,17 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-# 🎧 Background thread to receive results from master
+
+# Receiver thread
 def receive_responses():
     while True:
         try:
             response = client_receiver.recv_json()
             task_id = response["task_id"]
-            responses[task_id] = response
-            if task_id in response_events:
-                response_events[task_id].set()
+            redis_client.setex(task_id, 60, json.dumps(response))  # store with expiry
         except Exception as e:
             print(f"[CLIENT] Error receiving response: {e}")
 
-# Start response listener thread
 threading.Thread(target=receive_responses, daemon=True).start()
 
 @app.route('/')
@@ -135,15 +132,16 @@ def process_image():
     request_data = {"task_id": task_id, "task": task_type, "image": img_base64}
     client_sender.send_json(request_data)
 
-    response_events[task_id] = Event()
-
-    if not response_events[task_id].wait(timeout=10):
-        response_events.pop(task_id, None)
-        responses.pop(task_id, None)
+    # Poll Redis for up to 10 seconds
+    for _ in range(20):
+        response_json = redis_client.get(task_id)
+        if response_json:
+            redis_client.delete(task_id)
+            response = json.loads(response_json)
+            break
+        time.sleep(0.5)
+    else:
         return jsonify({"error": "Timeout waiting for response from worker."}), 504
-
-    response = responses.pop(task_id)
-    response_events.pop(task_id)
 
     processed_img = np.frombuffer(base64.b64decode(response["image"]), dtype=np.uint8)
     processed_img = cv2.imdecode(processed_img, cv2.IMREAD_GRAYSCALE)
