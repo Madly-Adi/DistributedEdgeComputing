@@ -1,18 +1,20 @@
 import zmq
 import threading
 import time
+import redis
 
 context = zmq.Context()
 
-# PULL socket to receive client requests
+# Redis client
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+
+# ZMQ sockets
 client_receiver = context.socket(zmq.PULL)
 client_receiver.bind("tcp://*:5558")
 
-# PUSH socket to send results back to clients
 client_responder = context.socket(zmq.PUSH)
 client_responder.bind("tcp://*:5559")
 
-# DEALER socket to forward tasks to workers
 worker_sender = context.socket(zmq.DEALER)
 worker_sender.bind("tcp://*:5555")
 
@@ -20,6 +22,14 @@ HEARTBEAT_PORT = 5557
 WORKER_TIMEOUT = 10  # seconds
 
 worker_last_seen = {}
+
+def log_master_event(message):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    log_entry = f"[{timestamp}] {message}"
+    print(log_entry)
+    # Push to Redis log list and keep only last 100 logs
+    redis_client.lpush("master_logs", log_entry)
+    redis_client.ltrim("master_logs", 0, 99)
 
 def monitor_heartbeats():
     context = zmq.Context()
@@ -31,7 +41,8 @@ def monitor_heartbeats():
             heartbeat = hb_socket.recv_json(flags=zmq.NOBLOCK)
             worker_id = heartbeat["worker_id"]
             worker_last_seen[worker_id] = time.time()
-            print(f"[HB] Received heartbeat from {worker_id}")
+            redis_client.hset("workers_status", worker_id, worker_last_seen[worker_id])
+            log_master_event(f"Received heartbeat from {worker_id}")
         except zmq.Again:
             pass
 
@@ -39,32 +50,35 @@ def monitor_heartbeats():
         now = time.time()
         dead_workers = [w for w, last in worker_last_seen.items() if now - last > WORKER_TIMEOUT]
         for dead in dead_workers:
-            print(f"[HB] Worker {dead} timed out")
+            log_master_event(f"Worker {dead} timed out")
             del worker_last_seen[dead]
+            redis_client.hdel("workers_status", dead)
 
         time.sleep(1)
 
 def receive_client_requests():
-    """Receive tasks from clients and forward them to workers."""
     while True:
         request_data = client_receiver.recv_json()
-        print(f"Received task from client: {request_data}")
+        log_master_event(f"Received task from client: {request_data.get('task')} (ID: {request_data.get('task_id')})")
         worker_sender.send_json(request_data)
 
 def receive_worker_results():
-    """Receive results from workers and send them back to clients."""
     while True:
         result = worker_sender.recv_json()
-        print(f"Worker result: {result}")
-        client_responder.send_json(result)  # Send result to client
-        client_responder.flush() if hasattr(client_responder, 'flush') else time.sleep(0.1)
+        log_master_event(f"Worker result received for task {result.get('task_id')} (Task: {result.get('task')})")
+        client_responder.send_json(result)
+        # Flush or small delay for push socket if needed
+        if hasattr(client_responder, 'flush'):
+            client_responder.flush()
+        else:
+            time.sleep(0.1)
 
 
 threading.Thread(target=monitor_heartbeats, daemon=True).start()
 threading.Thread(target=receive_client_requests, daemon=True).start()
 threading.Thread(target=receive_worker_results, daemon=True).start()
 
-print("Master Node is running...")
+log_master_event("Master Node is running...")
 
 while True:
     time.sleep(5)

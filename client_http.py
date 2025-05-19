@@ -21,7 +21,7 @@ client_receiver.connect("tcp://localhost:5559")
 # Redis setup
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
 
-# HTML template 
+# HTML template (with added LULC option)
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -84,10 +84,13 @@ HTML_TEMPLATE = '''
         <form method="post" enctype="multipart/form-data" action="/process_image">
             <input type="file" name="image" required>
             <select name="task" required>
-                <option value="">-- Select Task --</option>
-                <option value="grayscale">Grayscale</option>
-                <option value="edge">Edge Detection</option>
-            </select>
+                 <option value="">-- Select Task --</option>
+                 <option value="grayscale">Grayscale</option>
+                 <option value="edge">Edge Detection</option>
+                 <option value="segmentation">Image Segmentation</option>
+                 <option value="lulc">Semantic Segmentation</option>
+             </select>
+
             <input type="submit" value="Process Image">
         </form>
 
@@ -99,7 +102,6 @@ HTML_TEMPLATE = '''
 </body>
 </html>
 '''
-
 
 # Receiver thread
 def receive_responses():
@@ -144,7 +146,7 @@ def process_image():
         return jsonify({"error": "Timeout waiting for response from worker."}), 504
 
     processed_img = np.frombuffer(base64.b64decode(response["image"]), dtype=np.uint8)
-    processed_img = cv2.imdecode(processed_img, cv2.IMREAD_GRAYSCALE)
+    processed_img = cv2.imdecode(processed_img, cv2.IMREAD_COLOR)
     _, buffer = cv2.imencode('.jpg', processed_img)
     encoded_image = base64.b64encode(buffer).decode('utf-8')
 
@@ -152,4 +154,4 @@ def process_image():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)
-
+    

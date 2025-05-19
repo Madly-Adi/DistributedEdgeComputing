@@ -15,7 +15,8 @@ pip install --upgrade pip
 
 # 4. Install Python dependencies
 echo "📥 Installing Python dependencies..."
-pip install flask pyzmq opencv-python redis numpy
+pip install flask pyzmq opencv-python redis numpy torch torchvision torchgeo   
+
 
 # 5. Install Redis server
 echo "🧠 Installing Redis server..."
